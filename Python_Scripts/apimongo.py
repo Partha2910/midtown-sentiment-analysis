@@ -4,14 +4,20 @@ import time
 from bson.json_util import dumps
 
 
-CONSUMER_KEY = ''
-CONSUMER_SECRET = ''
-ACCESS_KEY = ''
-ACCESS_SECRET = ''
+CONSUMER_KEY = 'J79P30JiY90Vxv1fHdQ0Mv63M'
+CONSUMER_SECRET = 'zZ87IouN9conIvzic0tv0tAJZdDtOKW9EayPFbwMpgu90jpoxz'
+ACCESS_KEY = '67676031-O7u9TiKuT3ptxvUGwYgfDPK4y7HvQ7EFb37XhQDRA'
+ACCESS_SECRET = 'cbWjRWTanPkLzlMQJ3QmcnLqWaspPsSCVv251kUAprGRt'
 
 auth = tweepy.OAuthHandler(CONSUMER_KEY, CONSUMER_SECRET)
 auth.set_access_token(ACCESS_KEY, ACCESS_SECRET)
 api = tweepy.API(auth, wait_on_rate_limit=True, wait_on_rate_limit_notify=True)
+
+try:
+	conn = pymongo.MongoClient()
+	print "Connected successfully!"
+except pymongo.errors.ConnectionFailure, e:
+	print "Could not connect to MongoDB: %s" % e
 
 
 
@@ -27,15 +33,10 @@ def search(query, limit=100):
 	return tweets
 	
 
-def store(tweets, update=False):
-	try:
-		conn = pymongo.MongoClient()
-		print "Connected successfully!"
-	except pymongo.errors.ConnectionFailure, e:
-		print "Could not connect to MongoDB: %s" % e
+def store(tweets, update=False, dbname='TweetSentiment', collname='timelines'):
 
-	db = conn.TweetSentiment
-	collection = db.timelines
+	db = conn[dbname]
+	collection = db[collname]
 
 	for tweet in tweets:
 		try:
@@ -75,27 +76,37 @@ def store(tweets, update=False):
 		except UnicodeEncodeError:
 			print "Unicode Error"
 
-
-def loop(hours=10):
-	queries = ["bank of america", "wells fargo", "verizon",
-						 "ATT", "AT&T", "lowes", "home depot"]
+def loop(queries, hours=10, update=False, dbname='TweetSentiment', collname='timelines', limit=1500):
 	print "Scraping for the next " + str(hours) + " hours"
 	t0 = time.time()
-	time_left = 20*60 + 1
-	while time_left > 3600:
+	time_left = 600000
+	while time_left > 3600*hours*.2:
 		completed = []
 		while set(queries) != set(completed):
-				for query in queries:
-					if query not in completed:
-						try:
-							tweets = search(query, limit=0)
-							store(tweets, update=True)
-							completed.append(query)
-						except:
-							continue
+			for query in queries:
+				if query not in completed:
+					try:
+						tweets = search(query, limit=limit)
+						store(tweets, update=update, dbname=dbname, collname=collname)
+						completed.append(query)
+						print "Completed search for " + query
+					except:
+						continue
 		time_left = 3600*hours - (time.time() - t0)
 		print "There are " + str(time_left/60/60) + " hours left"
 		
+
+query = ["Home Depot", "ATT", "Verizon", "Bank of America", "Wells Fargo", "Lowes"]
+
+loop(queries=query, hours=5, limit=-1)
+
+
+# loop(queries=[":)"], hours=1, update=False,
+# 		 collname='pos_emotes', limit=1500)
+
+loop(queries=[":("], hours=1, update=False,
+			collname="neg_emotes", limit=1500)
+
 
 
 
