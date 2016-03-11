@@ -1,6 +1,7 @@
 import pymongo
 import tweepy
 import time
+from datetime import datetime
 from bson.json_util import dumps
 
 
@@ -21,15 +22,29 @@ except pymongo.errors.ConnectionFailure, e:
 
 
 
-def search(query, limit=100):
+def search(query, limit=100, since_until=False):
 	if limit > 0:
-		tweets = [tweet for tweet in tweepy.Cursor(api.search,
-																						 q=query, 
-																						 lang="en").items(limit)]
+		if since_until:
+			tweets = [tweet for tweet in tweepy.Cursor(api.search,
+																							 q=query,
+																							 since=since_until[0],
+																							 until=since_until[1],
+																							 lang="en").items(limit)]
+		else:
+			tweets = [tweet for tweet in tweepy.Cursor(api.search,
+																				 q=query,
+																				 lang="en").items(limit)]
 	else:
-		tweets = [tweet for tweet in tweepy.Cursor(api.search,
-																						 q=query, 
-																						 lang="en").items()]
+		if since_until:
+			tweets = [tweet for tweet in tweepy.Cursor(api.search,
+																							 q=query, 
+																							 since=since_until[0],
+																							 until=since_until[1],
+																							 lang="en").items()]
+		else:
+			tweets = [tweet for tweet in tweepy.Cursor(api.search,
+																				 q=query,
+																				 lang="en").items()]
 	return tweets
 	
 
@@ -76,36 +91,77 @@ def store(tweets, update=False, dbname='TweetSentiment', collname='timelines'):
 		except UnicodeEncodeError:
 			print "Unicode Error"
 
-def loop(queries, hours=10, update=False, dbname='TweetSentiment', collname='timelines', limit=1500):
+def loop(queries, since_until=["2010-01-01", datetime.today().strftime("%Y-%m-%d")], hours=10,
+ 					update=False, dbname='TweetSentiment', collname='timelines', limit=1500):
 	print "Scraping for the next " + str(hours) + " hours"
 	t0 = time.time()
-	time_left = 600000
-	while time_left > 3600*hours*.2:
-		completed = []
-		while set(queries) != set(completed):
-			for query in queries:
-				if query not in completed:
-					try:
-						tweets = search(query, limit=limit)
-						store(tweets, update=update, dbname=dbname, collname=collname)
-						completed.append(query)
-						print "Completed search for " + query
-					except:
-						continue
-		time_left = 3600*hours - (time.time() - t0)
-		print "There are " + str(time_left/60/60) + " hours left"
+	completed = []
+	while set(queries) != set(completed):
+		for query in queries:
+			if query not in completed:
+				try:
+					time_left = 3600*hours - (time.time() - t0)
+					print "There are " + str(time_left/60/60) + " hours left"
+					tweets = search(query, limit=limit, since_until=since_until)
+					print "Search complete, storing..."
+					store(tweets, update=update, dbname=dbname, collname=collname)
+					completed.append(query)
+					print "Completed search for " + query +" Between "+str(since_until)
+				except Exception as e:
+					print "Query failed, trying again: " + str(query)
+					print e
+					continue
+			if time_left < 3600*hours*.2:
+				return
+			
 		
+# lacking = ["AT&T ", ]
+# query = ["AT&T", "Verizon", "Bank of America", "Wells Fargo", "Lowe's", "Home Depot"]
 
-query = ["Home Depot", "ATT", "Verizon", "Bank of America", "Wells Fargo", "Lowes"]
 
-loop(queries=query, hours=5, limit=-1)
+from_untils = [["2016-02-10", "2016-02-11"],
+								["2016-02-11", "2016-02-12"],
+								["2016-02-12", "2016-02-13"],
+								["2016-02-13", "2016-02-14"],
+								["2016-02-14", "2016-02-15"],
+								["2016-02-15", "2016-02-16"],
+								["2016-02-16", "2016-02-17"],
+								["2016-02-17", "2016-02-18"],
+								["2016-02-18", "2016-02-19"],
+								["2016-02-19", "2016-02-20"],
+								["2016-02-20", "2016-02-21"],
+								["2016-02-21", "2016-02-22"],
+								["2016-02-22", "2016-02-23"],
+								["2016-02-23", "2016-02-24"],
+								["2016-02-24", "2016-02-25"],
+								["2016-02-25", "2016-02-26"],
+								["2016-02-26", "2016-02-27"],
+								["2016-02-27", "2016-02-28"],
+								["2016-02-28", "2016-02-29"],
+								["2016-02-29", "2016-03-01"],
+								["2016-03-01", "2016-03-02"],
+								["2016-03-02", "2016-03-03"],
+								["2016-03-03", "2016-03-04"],
+								["2016-03-04", "2016-03-05"],
+								["2016-03-05", "2016-03-06"],
+								["2016-03-06", "2016-03-07"]]
+
+
+
+
+for since_until in from_untils:
+	loop(queries=["\"AT\&T\" -ebay -job -deal -offer",
+								"\"Lowes\" -ebay -job -deal -offer",
+								"\"Verizon\" -ebay -job -deal -offer",
+								"\"Home Depot\" -ebay -job -deal -offer",
+								"\"Bank of America\" -ebay -job -deal -offer"],
+								 hours=1, limit=500, since_until=since_until)
 
 
 # loop(queries=[":)"], hours=1, update=False,
 # 		 collname='pos_emotes', limit=1500)
-
-loop(queries=[":("], hours=1, update=False,
-			collname="neg_emotes", limit=1500)
+# loop(queries=[":("], hours=1, update=False,
+# 			collname="neg_emotes", limit=1500)
 
 
 
