@@ -119,7 +119,7 @@ def loop(queries, since_until=["2010-01-01", datetime.today().strftime("%Y-%m-%d
 # query = ["AT&T", "Verizon", "Bank of America", "Wells Fargo", "Lowe's", "Home Depot"]
 
 
-from_untils = [["2016-02-10", "2016-02-11"],
+dates = [["2016-02-10", "2016-02-11"],
 								["2016-02-11", "2016-02-12"],
 								["2016-02-12", "2016-02-13"],
 								["2016-02-13", "2016-02-14"],
@@ -149,7 +149,7 @@ from_untils = [["2016-02-10", "2016-02-11"],
 
 
 
-for since_until in from_untils:
+for since_until in dates:
 	loop(queries=["\"AT\&T\" -ebay -job -deal -offer",
 								"\"Lowes\" -ebay -job -deal -offer",
 								"\"Verizon\" -ebay -job -deal -offer",

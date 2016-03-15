@@ -44,7 +44,7 @@ ggplot(per_day_pos, aes(x=per_day_pos$Date, y=per_day_pos$scaled_sentiment+per_d
   geom_bar(stat="identity", position="identity")
 
 
-read_and_plot <- function(filepath, datestring="2016-02-28", title){
+read_and_plot <- function(filepath, datestring="2016-02-28", title="Company X"){
   company_frame <- read.csv(filepath, stringsAsFactors = F)
   company_frame$id_str <- as.character(company_frame$id_str)
   company_frame$date <- as.Date(as.POSIXct(company_frame$created_at, origin="1970-01-01"))
@@ -56,25 +56,30 @@ read_and_plot <- function(filepath, datestring="2016-02-28", title){
   names(per_day) <- c("Date", "Sentiment", "Count")
   
   per_day$scaled_sentiment <- 0
-  per_day$scaled_sentiment[per_day$Sentiment=="N"] <- (per_day[per_day$Sentiment=="N", ]$Count/max(per_day[per_day$Sentiment=="N", ]$Count))
+  per_day$scaled_sentiment[per_day$Sentiment=="N"] <- -(per_day[per_day$Sentiment=="N", ]$Count/max(per_day[per_day$Sentiment=="N", ]$Count))
   per_day$scaled_sentiment[per_day$Sentiment=="P"] <- per_day[per_day$Sentiment=="P", ]$Count/max(per_day[per_day$Sentiment=="P", ]$Count)
   per_day_neg <- per_day[per_day$Sentiment=="N", ]
   per_day_pos <- per_day[per_day$Sentiment=="P", ]
   
-  
-  # ggplot(per_day, aes(x=per_day$Date, y=per_day$scaled_sentiment, fill=per_day$Sentiment)) +
-  #   geom_bar(stat="identity", position="identity")
 
-  ggplot(per_day_pos, aes(x=per_day_pos$Date, y=per_day_pos$scaled_sentiment/per_day_neg$scaled_sentiment)) +
-    geom_bar(stat="identity", position="identity", fill="darkcyan") + xlab("Date") + ylab("Positive / Negative Ratio")
+  
+  ggplot(per_day, aes(x=per_day$Date, y=per_day$scaled_sentiment, fill=per_day$Sentiment)) +
+    geom_bar(stat="identity", position="identity") + xlab("Date") + ylab("Positive / Negative Ratio") +
+    ggtitle(title) + legend("Sentiment")
+
+  
+  
+  # ggplot(per_day_pos, aes(x=per_day_pos$Date, y=per_day_pos$scaled_sentiment/per_day_neg$scaled_sentiment)) +
+  #   geom_bar(stat="identity", position="identity", fill="darkcyan") + xlab("Date") + ylab("Positive / Negative Ratio") +
+  #   ggtitle(title)
 
 }
 
 
-read_and_plot("~/Documents/LevelEdu/sentiment_analysis/R_Scripts/wells_fargo.csv", "2016-02-10")
-read_and_plot("~/Documents/LevelEdu/sentiment_analysis/R_Scripts/verizon.csv", "2016-02-10")
-read_and_plot("~/Documents/LevelEdu/sentiment_analysis/R_Scripts/home_depot.csv", "2016-02-10")
-read_and_plot("~/Documents/LevelEdu/sentiment_analysis/R_Scripts/lowes.csv", "2016-02-10")
-read_and_plot("~/Documents/LevelEdu/sentiment_analysis/R_Scripts/bank_of_america.csv", "2016-02-10")
-read_and_plot("~/Documents/LevelEdu/sentiment_analysis/R_Scripts/att.csv", "2016-02-10")
+read_and_plot("~/Documents/LevelEdu/sentiment_analysis/R_Scripts/wells_fargo.csv", "2016-02-10", "Wells Fargo")
+read_and_plot("~/Documents/LevelEdu/sentiment_analysis/R_Scripts/verizon.csv", "2016-02-10", "Verizon")
+read_and_plot("~/Documents/LevelEdu/sentiment_analysis/R_Scripts/home_depot.csv", "2016-02-10", "Home Depot")
+read_and_plot("~/Documents/LevelEdu/sentiment_analysis/R_Scripts/lowes.csv", "2016-02-10", "Lowes")
+read_and_plot("~/Documents/LevelEdu/sentiment_analysis/R_Scripts/bank_of_america.csv", "2016-02-10", "Bank of America")
+read_and_plot("~/Documents/LevelEdu/sentiment_analysis/R_Scripts/att.csv", "2016-02-10", "AT&T")
 

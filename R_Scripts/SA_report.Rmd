@@ -1,0 +1,355 @@
+---
+title: "Sentiment Analysis in R"
+author: "Luc Gendrot"
+date: "March 9, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Sentiment Analysis in R in 4 Easy Functions
+First we must load the required packages
+
+```{r eval=FALSE}
+library("rmongodb")
+library("dplyr")
+library("randomForest")
+library("dplyr")
+library("plyr")
+library("class")
+library("e1071")
+library("nnet")
+library("neuralnet")
+library("randomForest")
+library("ranger")
+```
+
+
+
+In order to score text for sentiment, a number of pre-processing steps need to occur in order to make the text interpretable for predictive models. 
+
+### 1. Tokenization
+The first step is Tokenization: the process of removing uninformative "stop" words such as "and", "the", "of", "or" etc. As well as splitting the document into individual words. Since we're doing sentiment analysis on tweets, we'll also remove #hashtags and @signs. 
+
+```{r eval=FALSE}
+tokenize <- function(documents){
+  # Lowercase all words for convenience
+  doc <- tolower(documents)
+  
+  # Remove all #hashtags and @mentions
+  doc <- gsub("(?:#|@)[a-zA-Z0-9_]+ ?", "", doc)
+  
+  # Remove words with more than 3 numbers in them (they overwhelm the corpus, and are uninformative)
+  doc <- gsub("[a-zA-Z]*([0-9]{3,})[a-zA-Z0-9]* ?", "", doc)
+  
+  # Remove all punctuation
+  doc <- gsub("[[:punct:]]", "", doc)
+  
+  # Remove all newline characters
+  doc <- gsub("[\r\n]", "", doc)
+  
+  # Regex pattern for removing stop words
+  stop_pattern <- paste0("\\b(", paste0(stopwords("en"), collapse="|"), ")\\b")
+  doc <- gsub(stop_pattern, "", doc)
+  
+  # Replace whitespace longer than 1 space with a single space
+  doc <- gsub(" {2,}", " ", doc)
+  
+  # Split on spaces and return list of character vectors
+  doc_words <- strsplit(doc, " ")
+  return(doc_words)
+}
+```
+
+
+### 2. Building the Corpus
+We can't consider every single word in the document as a feature in our model (Well, we could, but it would take a fortnight to train the models and they might not be accurate anyway). So instead we'll only consider the "k" most common words in *ALL* of our tweets. The corpus_size parameter of our function determines this size.
+
+If we happen to have a list of pre-compiled words that we want to be our corpus, instead of the most common words, we can do that too. One such list of words can be found for free [on Bing Liu's Website](https://www.cs.uic.edu/~liub/FBS/sentiment-analysis.html) under "Opinion Lexicon"
+
+In addition to compiling our corpus, the corpus_freq function will also create an "n documents" field in the output dataframe, which is the count of how many times each word in our corpus appears in all of our documents. We'll need this number for computing the TFIDF, which incidentally is the next function.
+
+```{r eval=FALSE}
+corpus_freq <- function(tokens, corpus_size=NULL, word_list = NULL){
+  # Concatenate all tokenized words into a single character list
+  all_words <- do.call(c, tokens)
+  
+  #If corpus size is not blank, and word list is, create a word frequency frame
+  #take the top occuring words up to the length of corpus_size
+  #and reorder alphabetically
+  
+  #This gives us an data frame of the most frequent words in our corpus, ordered alphabetically
+  #sized by the corpus_size parameter
+  if(is.null(word_list) & !is.null(corpus_size)){
+    corpusfreq <- data.frame(table(all_words))
+    names(corpusfreq) <- c("Word", "Freq")
+    corpusfreq$Word <- as.character(corpusfreq$Word)
+    corpusfreq$Freq <- as.numeric(corpusfreq$Freq)
+    corpusfreq <- corpusfreq[order(-corpusfreq$Freq), ]
+    corpusfreq <- corpusfreq[1:corpus_size, ]
+    corpusfreq <- corpusfreq[order(corpusfreq$Word), ]
+  }
+  
+  #Else it is assumed a pre-compiled word list has been passed into the function
+  corpusfreq <- data.frame(word_list)
+  names(corpusfreq) <- c("Word")
+  
+  # N docs is where we will store the document frequency (I.E how many documents a word appears in)
+  # We'll need this to calculate TF-IDF
+  corpusfreq$n_docs <- 0
+  
+  # For every vector of words in our tokenized list, count how many times each word in our corpus occurs
+  for(token_list in tokens){
+    t <- data.frame(table(token_list))
+    names(t) <- c("Word", "n_docs")
+    t$n_docs <- 1
+    t_freq <- merge(x=corpusfreq, y=t, by="Word", all.x=TRUE)
+    t_freq$n_docs.y[is.na(t_freq$n_docs.y)] <- 0
+    corpusfreq$n_docs <- corpusfreq$n_docs + t_freq$n_docs.y
+  }
+  return(corpusfreq)
+}
+```
+
+### 3. Term Frequency - Inverse Document Frequency
+
+Term Frequency - Inverse Document Frequency is a technique used to weight the frequency of words appearing in our document set. The equation for TFIDF for each word in a single document is as follows:
+
+$$log(1 + f_w) * log(1 + \frac{N}{d_w})$$
+
+* Where
+  + $f_w$ is the word frequency in a single document (I.E. "Twitter" appears twice in a single tweet would mean an $f_w$ of two)
+  + $N$ is the total number of documents
+  + $d_w$ is the number of times this word appears in ALL documents
+
+
+The benefits of this method of weighting are that words which appear extremely frequently in our document set will have a much lower value in our feature vector. Looking at the second log term, if a word appears in every single document it will result in the second term being 0. This eliminates words that carry little meaning. If the word "bologna" appears in every single tweet, it likely won't tell us anything about the sentiment of that tweet. 
+
+And that brings us to the code:
+
+```{r eval=FALSE}
+tfidf <- function(document, corpus){
+  #Create a data frame out of a single document and its word frequency
+  # For tweets this will be mostly 1's
+  doc_f <- data.frame(unlist(table(document)))
+  names(doc_f) <- c("Word", "Freq")
+  
+  #Get a data frame of the words in the corpus found in the current document
+  in_doc <- intersect(doc_f$Word, corpus$Word)
+  doc_f <- doc_f[doc_f$Word %in% in_doc, ]
+  
+  #Get a data frame of the words in the corpus not found in the current document
+  #Set their frequency to 0
+  not_in_doc <- data.frame(Word=setdiff(corpus$Word, document))
+  not_in_doc$Freq <-0
+  
+  #Bind our two data frames, we now have frequencies for the words that are in our corpus, and 0s everywhere else
+  tf <- rbind(doc_f, not_in_doc)
+  tf$Word <- as.character(tf$Word)
+  tf$Freq <- as.numeric(tf$Freq)
+  
+  #Order alphabetically again so it remains compatible with our corpus data frame
+  tf <- tf[order(tf$Word), ]
+  
+  #Calculate the tfidf
+  #log1p is the same as log(1+___)
+  log_freq <- log1p(tf$Freq)
+  log_doc_freq <- log1p(nrow(corpus)/corpus$n_docs)
+  tf$tfidf <- log_freq * log_doc_freq
+  
+  #Divide by zero errors get NA values, but should be 0s
+  tf$tfidf[is.na(tf$tfidf)] <- 0
+  return(tf)
+}
+```
+
+
+### 4. Putting all together: The feature matrix
+
+Now we have everything we need to build a vector representation of each of our documents. The goal is to end up with an $N$ x $C$ matrix where $C$ is the size of our corpus.
+
+```{r eval=FALSE}
+# This function takes a token_list (the output of tokenize) and either a corpus size to create a new corpus, or a pre-compiled corpus
+get_feature_vectors <- function(tokens_list, corpus_size=1500, corpus=NULL){
+  if(is.null(corpus)){
+    corpus <- corpus_freq(tokens_list, corpus_size=corpus_size)
+  }
+  
+  #Our feature matrix starts out as an all 0 matrix with N by C dimensions
+  feature_matrix <- matrix(0, length(tokens_list), nrow(corpus))
+  
+  #For every document in our tokenized list, calculate the tfidf feature vector, and put it into our feature matrix row-wise
+  for(i in 1:length(tokens_list)){
+    feature_vector <- tfidf(tokens_list[[i]], corpus)$tfidf
+    feature_matrix[i, 1:nrow(corpus)] <- feature_vector
+  }
+  
+  #The column names are the same as the alphabetical list of words in our corpus
+  #Unnecessary step, but useful for examining the resulting feature matrix
+  colnames(feature_matrix) <- corpus$Word
+  return(data.frame(feature_matrix))
+}
+```
+
+
+
+### 5. Helper functions for analysis
+These functions aren't necessarily part of the analysis, but are useful for evaluating our model. With the exception of the ensemble function, which is required for this particular "bag of models" technique.
+
+```{r eval=FALSE}
+
+#add_targets takes our feature matrix, and the original data frame (with the documents in the same order) and adds the dependent variable for model training. In this case it's our pre-labeled sentiment.
+add_targets <- function(feature_matrix, df){
+  feature_matrix$sentiment <- df$sentiment
+  return(feature_matrix)
+}
+
+
+#The ensemble function takes a list of prediction vectors, each with a length equal to the number of documents, and takes a majority vote.
+ensemble <- function(predictions){
+  votes <- matrix(0, length(predictions), length(predictions[[1]]))
+  for(i in 1:length(predictions)){
+    votes[i,] <- ifelse(predictions[[i]] == "P",1,0)
+  }
+  vote_decision <- colSums(votes)/nrow(votes)
+  vote_decision <- ifelse(vote_decision >= .5,"P", "N")
+  
+  return(vote_decision)
+}
+
+
+#Calculates accuracy, true negative, true positive, and positive predictive value of a confusion matrix.
+sensitivity <- function(confusion_matrix){
+  acc <- (confusion_matrix[1]+confusion_matrix[4])/sum(confusion_matrix)
+  tn <- (confusion_matrix[1]) / (confusion_matrix[3]+confusion_matrix[1])
+  ppv <- confusion_matrix[4]/(confusion_matrix[4]+confusion_matrix[3])
+  tp <- (confusion_matrix[4]) / (confusion_matrix[4]+confusion_matrix[2])
+  return(list(accuracy=acc, specificity=tn, precision=ppv, sensitivity=tp))
+}
+```
+
+
+
+
+### 6. Example
+
+
+```{r eval=FALSE}
+#Tokenize
+tokens <- tokenize(pos_neg_tweets$text)
+
+#Get corpus, and calculate feature vectors
+my_features <- get_feature_vectors(tokens, corpus_size=3000)
+
+#Add the dependent variable for model fitting, I.E. the pre-labeled sentiment
+my_features <- add_targets(my_features, pos_neg_tweets)
+my_features$sentiment <- as.factor(my_features$sentiment)
+```
+
+
+pos_neg_tweets is a data frame where each row is a single tweet, containing at minimum a column called $text which contains the raw text of the tweets. Since this is our training data, the sentiment is pre-labeled in a column called $sentiment. Also, since the order is kept throughout the process, this data frame can also be used to store information about the tweet such as id, retweets and favorites, and user information which can then be added to the feature_matrix either before or after analysis.
+
+
+```{r eval=FALSE}
+train <- sample_frac(my_features, .8)
+test <- setdiff(my_features, train)
+test <- sample_frac(test, 1)
+```
+
+
+We then create our training and test sets for model evaluation, and we begin training our models.
+
+
+```{r eval=FALSE}
+#Formula for each model
+form <- as.formula(paste("sentiment~", paste(setdiff(names(test), c("sentiment")), collapse="+")))
+
+# Single hidden-layer neural network of size 10
+m_nnet <- nnet(form, data=train, size=10, MaxNWts=100000)
+#Naive Bayes algorithm with laplace smoothing
+m_nbayes <- naiveBayes(form, data=train, laplace=1000, threshold=.5)
+#Random forest
+m_randomforest <- ranger(dependent.variable.name="sentiment", data=train, write.forest=TRUE)
+#logistic regressions
+m_logit <- glm(form, data=train, family=binomial(link='logit'))
+#Support vector machine
+m_svm <- svm(form, data=train, type="C")
+```
+
+
+We can then evaluate the model on the test set
+
+```{r eval=FALSE}
+pred_nnet <- predict(m_nnet, test, type="class")
+
+pred_nbayes <- predict(m_nbayes, test, threshold=.5, laplace=1000)
+
+pred_rf <- predict(m_randomforest, data=test)
+pred_rf <- pred_rf$predictions
+
+pred_log <- predict(m_logit, test, type="response")
+pred_log <- ifelse(pred_log > .5,"P","N")
+
+pred_svm <- predict(m_svm, test)
+
+ens <- ensemble(list(pred_nnet, pred_nbayes, pred_rf, pred_log, pred_svm))
+
+```
+
+
+Now we evaluate
+```{r eval=FALSE}
+table(test$sentiment, ens)
+```
+```{}
+   ens
+       N    P
+  N 1234  124
+  P  117 1003
+```
+
+
+```{r, eval=FALSE}
+sensitivity(table(test$sentiment, ens))
+```
+```{}
+$accuracy
+[1] 0.9027441485
+
+$specificity
+[1] 0.9086892489
+
+$precision
+[1] 0.8899733807
+
+$sensitivity
+[1] 0.8955357143
+
+```
+
+
+### 7. Conclusion
+
+Obviously this isn't the fastest method in the world, in fact it takes quite a while to train all the models, so if this technique were to be used in a production setting, saving the models for later use with "saveRDS" and "readRDS" would be necessary. Many of the functions used for pre-processing could also be sped up with the use of C++ with Rcpp. 
+
+When the fitted models are saved ahead of time and the number of tweets isn't too large (say, after grabbing 1 new day's worth of tweets) then the method is relatively fast. Here's some of what I was able to get using a size 3000 corpus with models trained on 30,000+ positive and negative tweets.
+
+![wells fargo](../media/Wells Fargo Compare.jpeg)
+![Bank of America](../media/Bank of America Compare.jpeg)
+
+These are visually stunning but aren't terribly informative, as it's hard to tell if there are more positive or negative tweets. A ratio of positive to negative tweets should be more interesting.
+
+![Wells Fargo](../media/Wells_Fargo.jpeg)
+![Bank of America](../media/Bank of America.jpeg)
+![Lowes](../media/Lowes.jpeg)
+![Home Depot](../media/Home Depot.jpeg)
+![Verizon](../media/Verizon.jpeg)
+
+
+
+
+
+
+

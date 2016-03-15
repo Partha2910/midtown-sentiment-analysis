@@ -1,7 +1,5 @@
 library("rmongodb")
 library("dplyr")
-library("tm")
-library("scatterplot3d")
 library("randomForest")
 library("dplyr")
 library("plyr")
@@ -30,12 +28,12 @@ if(mongo.is.connected(mongo) == TRUE) {
   mongo.bson.buffer.append(fields, "text", 1L)
   mongo.bson.buffer.append(fields, "id_str", 1L)
   mongo.bson.buffer.append(fields, "created_at", 1L)
+  # mongo.bson.buffer.append(fields, "geo", 0L)
   mongo.bson.buffer.append(fields, "_id", 0L)
   fields <- mongo.bson.from.buffer(fields)
   tweets <- mongo.find.all(mongo, collection, fields=fields)
   pos_tweets <- data.frame(matrix(unlist(tweets), nrow=length(tweets), byrow=T))
   pos_tweets$sentiment <- "P"
-
   collection <- paste(db, "neg_emotes", sep=".")
   tweets <- mongo.find.all(mongo, collection, fields=fields)
   neg_tweets <- data.frame(matrix(unlist(tweets), nrow=length(tweets), byrow=T))
@@ -59,14 +57,16 @@ tokenize <- function(documents){
   doc <- gsub("[a-zA-Z]*([0-9]{3,})[a-zA-Z0-9]* ?", "", doc)
   doc <- gsub("[[:punct:]]", "", doc)
   doc <- gsub("[\r\n]", "", doc)
-  doc_words <- strsplit(doc, split=" ")
+  stop_pattern <- paste0("\\b(", paste0(stopwords("en"), collapse="|"), ")\\b")
+  doc <- gsub(stop_pattern, "", doc)
+  doc <- gsub(" {2,}", " ", doc)
+  doc_words <- strsplit(doc, " ")
   return(doc_words)
 }
 
 corpus_freq <- function(tokens, corpus_size=NULL, word_list = NULL){
   all_words <- do.call(c, tokens)
   all_words <- all_words[-which(all_words == "")]
-  all_words <- all_words[-which(all_words %in% stopwords("en"))]
   
   if(is.null(word_list) & !is.null(corpus_size)){
     corpusfreq <- data.frame(table(all_words))
@@ -139,7 +139,6 @@ get_feature_vectors <- function(tokens_list, corpus_size=1500, corpus=NULL){
 
 add_targets <- function(feature_matrix, df){
   feature_matrix$sentiment <- df$sentiment
-  feature_matrix$textblob <- df$X0.0
   return(feature_matrix)
 }
 
@@ -201,47 +200,49 @@ test <- sample_frac(test, 1)
 form <- as.formula(paste("sentiment~", paste(setdiff(names(test), c("sentiment", "textblob")), collapse="+")))
 m_nnet <- nnet(form, data=train, size=10, MaxNWts=100000)
 m_nbayes <- naiveBayes(form, data=train, laplace=1000, threshold=.5)
-m_randomforest <- ranger(dependent.variable.name="sentiment", data=train[,-which(names(train) %in% "textblob")], write.forest=TRUE)
+m_randomforest <- ranger(dependent.variable.name="sentiment", data=train, write.forest=TRUE)
 m_logit <- glm(form, data=train, family=binomial(link='logit'))
 m_svm <- svm(form, data=train, type="C")
 
 
 #Predicting
 #nnet
-m_nnet <- readRDS("~/Documents/LevelEdu/sentiment_analysis/models/nnet_sentiment_3000.rds")
-pred_nnet <- predict(m_nnet, test[,-which(names(test) %in% "textblob")], type="class")
+
+pred_nnet <- predict(m_nnet, test, type="class")
 conf_nnet <- table(pred_nnet, test$sentiment)
 sens_nnet <- sensitivity(conf_nnet)
 sens_nnet
 
 # Naive Bayes Classifier
-m_nbayes <- readRDS("~/Documents/LevelEdu/sentiment_analysis/models/naivebayes_sentiment_3000.rds")
-pred_nbayes <- predict(m_nbayes, test[,-which(names(test) %in% "textblob")], threshold=.5, laplace=1000)
+
+pred_nbayes <- predict(m_nbayes, test, threshold=.5, laplace=1000)
 conf_nbayes <- table(pred_nbayes, test$sentiment)
 sens_nbayes <- sensitivity(conf_nbayes)
 sens_nbayes
 
 # Random Forest
-m_randomforest <- readRDS("~/Documents/LevelEdu/sentiment_analysis/models/randmforest_sentiment_3000.rds")
-pred_rf <- predict(m_randomforest, data=test[,-which(names(test) %in% "textblob")])
+
+pred_rf <- predict(m_randomforest, data=test)
 pred_rf <- pred_rf$predictions
 conf_rf <- table(test$sentiment, pred_rf)
 sens_rf <- sensitivity(conf_rf)
 
 #Logistic Regression
-m_logit <- readRDS("~/Documents/LevelEdu/sentiment_analysis/models/logit_sentiment_3000.rds")
-pred_log <- predict(m_logit, test[,-which(names(test) %in% "textblob")], type="response")
+
+pred_log <- predict(m_logit, test, type="response")
 pred_log <- ifelse(pred_log > .5,"P","N")
 conf_log <- table(pred_fitted, test$sentiment)
 sens_log <- sensitivity(conf_log)
 
 
 #SVM
-m_svm <- readRDS("~/Documents/LevelEdu/sentiment_analysis/models/svm_sentiment_3000.rds")
-pred_svm <- predict(m_svm, test[,-which(names(test) %in% "textblob")])
+
+pred_svm <- predict(m_svm, test)
 conf_svm <- table(pred_svm, test$sentiment)
 sens_svm <- sensitivity(conf_svm)
 
+
+ens <- ensemble(list(pred_nnet, pred_nbayes, pred_rf, pred_log, pred_svm))
 
 # saveRDS(m_logit, "~/Documents/LevelEdu/sentiment_analysis/models/logit_sentiment_3000.rds")
 # saveRDS(m_nbayes, "~/Documents/LevelEdu/sentiment_analysis/models/naivebayes_sentiment_3000.rds")
@@ -249,16 +250,6 @@ sens_svm <- sensitivity(conf_svm)
 # saveRDS(m_randomforest,"~/Documents/LevelEdu/sentiment_analysis/models/randmforest_sentiment_3000.rds")
 # saveRDS(m_svm,"~/Documents/LevelEdu/sentiment_analysis/models/svm_sentiment_3000.rds")
 # saveRDS(corpus, "~/Documents/LevelEdu/sentiment_analysis/models/corpus_3000.rds")
-
-
-
-
-
-ens <- ensemble(list(pred_log, pred_rf, pred_svm, pred_nbayes, pred_nnet))
-sens_ens <- sensitivity(table(ens, test$sentiment))
-sens_ens
-
-
 
 
 
@@ -291,18 +282,68 @@ predict_and_save <- function(search_term, filepath, corpus){
   write.csv(company_frame, filepath)
 }
 
-predict_and_save("Verizon", "~/Documents/LevelEdu/sentiment_analysis/R_Scripts/verizon.csv", corpus=sentiment_corpus)
-predict_and_save("AT\&T", "~/Documents/LevelEdu/sentiment_analysis/R_Scripts/att.csv", corpus=sentiment_corpus)
-predict_and_save("Home Depot", "~/Documents/LevelEdu/sentiment_analysis/R_Scripts/home_depot.csv", corpus=sentiment_corpus)
-predict_and_save("Lowes", "~/Documents/LevelEdu/sentiment_analysis/R_Scripts/lowes.csv", corpus=sentiment_corpus)
-predict_and_save("Bank of America", "~/Documents/LevelEdu/sentiment_analysis/R_Scripts/bank_of_america.csv", corpus=sentiment_corpus)
-predict_and_save("Wells Fargo", "~/Documents/LevelEdu/sentiment_analysis/R_Scripts/wells_fargo.csv", corpus=sentiment_corpus)
+
+
+#Searches the database for tweets about query, then saves sentiment-labeled file to CSV
+# predict_and_save("Verizon", "~/Documents/LevelEdu/sentiment_analysis/R_Scripts/verizon.csv", corpus=sentiment_corpus)
+# predict_and_save("AT\&T", "~/Documents/LevelEdu/sentiment_analysis/R_Scripts/att.csv", corpus=sentiment_corpus)
+# predict_and_save("Home Depot", "~/Documents/LevelEdu/sentiment_analysis/R_Scripts/home_depot.csv", corpus=sentiment_corpus)
+# predict_and_save("Lowes", "~/Documents/LevelEdu/sentiment_analysis/R_Scripts/lowes.csv", corpus=sentiment_corpus)
+# predict_and_save("Bank of America", "~/Documents/LevelEdu/sentiment_analysis/R_Scripts/bank_of_america.csv", corpus=sentiment_corpus)
+# predict_and_save("Wells Fargo", "~/Documents/LevelEdu/sentiment_analysis/R_Scripts/wells_fargo.csv", corpus=sentiment_corpus)
 
 
 
-pos_neg_tweets <- read.csv("~/Documents/LevelEdu/sentiment_analysis/R_Scripts/pos_neg_labeled.csv")
 
-sensitivity(table(ens, test$sentiment))
-sensitivity(table(test$textblob, test$sentiment))
+
+
+## Query Tweets about "Bernie Sanders" from the database
+
+mongo <- mongo.create()
+fields <- mongo.bson.buffer.create()
+mongo.bson.buffer.append(fields, "text", 1L)
+mongo.bson.buffer.append(fields, "id_str", 1L)
+mongo.bson.buffer.append(fields, "created_at", 1L)
+mongo.bson.buffer.append(fields, "_id", 0L)
+fields <- mongo.bson.from.buffer(fields)
+query = list("$text"=list("$search"="\"Bernie Sanders\""))
+mongo_search <- mongo.find.all(mongo, "TweetSentiment.timelines", fields=fields, query=query)
+bernie <- data.frame(matrix(unlist(mongo_search), nrow=length(mongo_search), byrow=T))
+names(bernie) <- c("id_str", "text", "created_at")
+
+
+## Load the Corpus from File
+sentiment_corpus <- readRDS("~/Documents/LevelEdu/sentiment_analysis/models/corpus_3000.rds")
+
+#Load the Pre-trained Models
+m_nnet <- readRDS("~/Documents/LevelEdu/sentiment_analysis/models/nnet_sentiment_3000.rds")
+m_nbayes <- readRDS("~/Documents/LevelEdu/sentiment_analysis/models/naivebayes_sentiment_3000.rds")
+m_randomforest <- readRDS("~/Documents/LevelEdu/sentiment_analysis/models/randmforest_sentiment_3000.rds")
+m_svm <- readRDS("~/Documents/LevelEdu/sentiment_analysis/models/svm_sentiment_3000.rds")
+m_logit <- readRDS("~/Documents/LevelEdu/sentiment_analysis/models/logit_sentiment_3000.rds")
+
+#Tokenize and get feature vectors
+tokens <- tokenize(bernie$text)
+bernie_features <- get_feature_vectors(tokens, corpus=sentiment_corpus)
+
+
+#Predict using all the models
+bernie_prediction_nnet <- predict(m_nnet, bernie_features, type="class")
+bernie_prediction_nbayes <- predict(m_nbayes, bernie_features, threshold=.5, laplace=1000)
+bernie_prediction_rf <- predict(m_randomforest, data=bernie_features)
+bernie_prediction_rf <- bernie_prediction_rf$predictions
+bernie_prediction_log <- predict(m_logit, bernie_features, type="response")
+bernie_prediction_log <- ifelse(bernie_prediction_log > .5,"P","N")
+bernie_prediction_svm <- predict(m_svm, bernie_features)
+
+#Use the ensemble function to vote
+bernie_ensemble <- ensemble(list(bernie_prediction_log,
+                                bernie_prediction_rf, 
+                                bernie_prediction_svm, 
+                                bernie_prediction_nbayes, 
+                                bernie_prediction_nnet))
+
+bernie$sentiment <- bernie_ensemble
+table(bernie$sentiment)
 
 
