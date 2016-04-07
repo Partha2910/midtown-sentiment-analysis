@@ -16,3 +16,10 @@ file2 = open('/Users/Lucien/Documents/LevelEdu/sentiment_analysis/R_Scripts/pos_
 writer = csv.writer(file2)
 writer.writerows(new_csv)
 file2.close()
+
+
+
+
+
+		
+			
